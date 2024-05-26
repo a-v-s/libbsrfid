@@ -84,7 +84,7 @@ typedef struct {
 			uint8_t block_address;
 			uint8_t key[6];
 		} mfc_crypto1;
-	}
+	};
 } picc_t;
 
 rc52x_result_t PICC_REQA_or_WUPA(bs_pdc_t *pdc, uint8_t command, ///< The command to send - PICC_CMD_REQA or PICC_CMD_WUPA

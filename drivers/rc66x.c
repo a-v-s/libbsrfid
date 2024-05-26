@@ -29,12 +29,18 @@ void rc66x_antenna_off(rc66x_t *rc66x) {
 
 void rc66x_reset(rc66x_t *rc66x) {
 
-	// Note this one reset is active high!
-	bshal_gpio_write_pin(rc66x->transport_instance.spim->rs_pin,
-			rc66x->transport_instance.spim->rs_pol);
-	rc66x->delay_ms(1);
-	bshal_gpio_write_pin(rc66x->transport_instance.spim->rs_pin,
-			!rc66x->transport_instance.spim->rs_pol);
+//	// hard reset if available
+//
+//		// Note this one reset is active high!
+//		bshal_gpio_write_pin(rc66x->transport_instance.spim->rs_pin,
+//				rc66x->transport_instance.spim->rs_pol);
+//		rc66x->delay_ms(1);
+//		bshal_gpio_write_pin(rc66x->transport_instance.spim->rs_pin,
+//				!rc66x->transport_instance.spim->rs_pol);
+//
+		// lese a soft reset
+		rc66x_set_reg8(rc66x, RC66X_REG_Command, RC66X_CMD_SoftReset);
+
 
 }
 
@@ -240,4 +246,413 @@ rc66x_result_t rc66x_crypto1_begin(bs_pdc_t *rc66x, picc_t *picc) {
 
 	return STATUS_ERROR;
 
+}
+#include <stdio.h>
+
+void rc66x_test(rc66x_t *rc66x) {
+	rc66x_set_reg8(rc66x, RC66X_REG_Command, RC66X_CMD_Idle);
+	rc66x_set_reg8(rc66x, RC66X_REG_FIFOControl, 0xB0);
+	{ uint8_t data[] = { 0x0A, 0x0A }; rc66x_send(rc66x, 0x05, data, sizeof(data)); }
+	rc66x_set_reg8(rc66x, RC66X_REG_Command, RC66X_CMD_LoadProtocol);
+	rc66x_set_reg8(rc66x, RC66X_REG_FIFOControl, 0xB0);
+	rc66x_set_reg8(rc66x, 0x28, 0x8E);
+	{ uint8_t data[] = { 0x01, 0x94, 0x28, 0x12 }; rc66x_send(rc66x, 0x05, data, sizeof(data)); }
+	rc66x_set_reg8(rc66x, RC66X_REG_Command, RC66X_CMD_LoadReg);
+	rc66x_set_reg8(rc66x, RC66X_REG_Command, RC66X_CMD_Idle);
+	rc66x_set_reg8(rc66x, RC66X_REG_FIFOControl, 0xB0);
+	rc66x_set_reg8(rc66x, 0x06, 0x7F);
+	{ uint8_t data[] = { 0x36, 0x01, 0x00, 0x00 }; rc66x_send(rc66x, 0x05, data, sizeof(data)); }
+	rc66x_set_reg8(rc66x, RC66X_REG_Command, RC66X_CMD_Transceive);
+
+	uint8_t waitIRq = 0b00010110;		// RxIRq and IdleIRq + ErrIRQ
+	uint8_t irq0, irq1;
+	uint32_t begin = rc66x->get_time_ms();
+	while ((rc66x->get_time_ms() - begin) < RC66X_TIMEOUT_ms) {
+		rc66x_get_reg8(rc66x, RC66X_REG_IRQ0, &irq0);
+		rc66x_get_reg8(rc66x, RC66X_REG_IRQ1, &irq1);
+		if (irq0 & waitIRq) {// One of the interrupts that signal success has been set.
+			puts ("Found");
+			break;
+		}
+		if (irq1 & 0x01) {		// Timer interrupt - nothing received in 25ms
+			puts ("Timeout (irq)");
+		}
+	}
+
+	if ((rc66x->get_time_ms() - begin) >= RC66X_TIMEOUT_ms)
+		puts("Timeout (clock)");
+
+	uint8_t uid[8] = {};
+	rc66x_recv(rc66x, 0x05, uid, sizeof(uid));
+	printf("%02X %02X %02X %02X %02X %02X %02X %02X \n",
+				uid[0], uid[1], uid[2], uid[3],
+				uid[4], uid[5], uid[6], uid[7]);
+
+}
+
+
+void mfrc630_ISO15693_init(rc66x_t *rc66x){
+	uint8_t protocol = 0x0A;
+
+	// Configure Timers
+	rc66x_set_reg8(rc66x, RC66X_REG_T0Control,0x98);  		//configure T0
+	rc66x_set_reg8(rc66x, RC66X_REG_T1Control,0x92);			//configure T1 and cascade it with T0
+	rc66x_set_reg8(rc66x, RC66X_REG_T2Control,0x20);			//Configure T2 for LFO Autotrimm
+	rc66x_set_reg8(rc66x, RC66X_REG_T0ReloadHi,0x03);			//T2 reload value for LFO AutoTrimm
+	rc66x_set_reg8(rc66x, RC66X_REG_T0ReloadLo,0xFF);			//T2 reload value high
+	rc66x_set_reg8(rc66x, RC66X_REG_T3Control,0x00);			//Configure T3 (for LPCD /Autotrimm)
+
+	//Configure FiFo
+	rc66x_set_reg8(rc66x, RC66X_REG_FIFOControl,0x90);		//Set Fifo-Size and Waterlevel
+	rc66x_set_reg8(rc66x, RC66X_REG_WaterLevel,0xFE);			//Set Waterlevel
+
+	//Configure RXBITCTRL
+	rc66x_set_reg8(rc66x, RC66X_REG_RxBitCtrl,0x80);			//Set RXBITCTLR register
+
+	rc66x_set_reg8(rc66x, RC66X_REG_Command, RC66X_CMD_Idle);	//Cancel any commands
+	rc66x_set_reg8(rc66x, RC66X_REG_FIFOControl, 0xB0);			//Flush Fifo
+	rc66x_set_reg8(rc66x, RC66X_REG_IRQ0, 0x7F);				//Clear IRQ0
+	rc66x_set_reg8(rc66x, RC66X_REG_IRQ1, 0x7F);				//Clear IRQ1
+
+	//Set Timers
+	rc66x_set_reg8(rc66x, RC66X_REG_T0ReloadHi,0x18);			//T0 Reload Hi
+	rc66x_set_reg8(rc66x, RC66X_REG_T0ReloadLo,0x86);			//T0 Reload Lo
+	rc66x_set_reg8(rc66x, RC66X_REG_T1ReloadHi,0x00);			//T1 Reload Hi
+	rc66x_set_reg8(rc66x, RC66X_REG_T1ReloadLo,0x00);			//T1 Reload Lo
+
+	// Write in FIFO "Load protocol" params(TxProtocol=Iso15693(0a), RxProtocol=Iso15693(0a),
+	rc66x_set_reg8(rc66x, RC66X_REG_FIFOData,protocol);
+	rc66x_set_reg8(rc66x, RC66X_REG_FIFOData,protocol);
+
+	rc66x_set_reg8(rc66x, RC66X_REG_IRQ0En, (1<<4));	// Enable IRQ0 interrupt source
+	rc66x_set_reg8(rc66x, RC66X_REG_IRQ1En, (1<<6)); 	// Enable IRQ1 interrupt source
+	rc66x_set_reg8(rc66x, RC66X_REG_Command,RC66X_CMD_LoadProtocol);	// Execute Rc663 command: "Load protocol"
+
+	rc66x_set_reg8(rc66x, RC66X_REG_IRQ0En, 0x00);		//Disable IRQ
+	rc66x_set_reg8(rc66x, RC66X_REG_IRQ1En, 0x00);		//Disable IRQ
+
+	rc66x_set_reg8(rc66x, RC66X_REG_FIFOControl, 0xB0);			//Flush Fifo
+
+	//> Apply RegisterSet
+	rc66x_set_reg8(rc66x, RC66X_REG_TxCrcPreset,0x7B);
+	rc66x_set_reg8(rc66x, RC66X_REG_RxCrcPreset,0x7B);
+	rc66x_set_reg8(rc66x, RC66X_REG_TxDataNum,0x08);
+	rc66x_set_reg8(rc66x, RC66X_REG_TxModWidth,0x00);
+	rc66x_set_reg8(rc66x, RC66X_REG_TxSym10BurstLen,0x00);
+	rc66x_set_reg8(rc66x, RC66X_REG_TXWaitCtrl,0x00);
+	rc66x_set_reg8(rc66x, RC66X_REG_FrameCon,0x0F);
+	rc66x_set_reg8(rc66x, RC66X_REG_RxCtrl,0x02);
+	rc66x_set_reg8(rc66x, RC66X_REG_RxThreshold,0x4E);
+	rc66x_set_reg8(rc66x, RC66X_REG_RxAna,0x04);
+	rc66x_set_reg8(rc66x, RC66X_REG_RxWait,0x8C);				// Set the RxWait register
+	rc66x_set_reg8(rc66x, RC66X_REG_TXWaitCtrl,0xC0);
+	rc66x_set_reg8(rc66x, RC66X_REG_TxWaitLo,0x00);
+
+	// Write Timer-0, Timer-1 reload values(high,low)
+	rc66x_set_reg8(rc66x, RC66X_REG_T0ReloadHi,0x18);
+	rc66x_set_reg8(rc66x, RC66X_REG_T0ReloadLo,0x86);
+	rc66x_set_reg8(rc66x, RC66X_REG_T1ReloadHi,0x00);
+	rc66x_set_reg8(rc66x, RC66X_REG_T1ReloadLo,0x00);
+	rc66x_set_reg8(rc66x, RC66X_REG_TxAmp,0x0A);
+	rc66x_set_reg8(rc66x, RC66X_REG_DrvMode,0x81);
+	rc66x_set_reg8(rc66x, RC66X_REG_Status,0x00); // Disable MIFARE Crypto1
+	//Set Driver
+}
+
+
+int test_read_block(rc66x_t *rc66x, uint8_t* instruction, int instr_len) {
+
+
+		//Set timeout for Timer0/Timer1, set reload values
+		rc66x_set_reg8(rc66x, RC66X_REG_T0ReloadHi,0x24);
+		rc66x_set_reg8(rc66x, RC66X_REG_T0ReloadLo,0xEB);
+		rc66x_set_reg8(rc66x, RC66X_REG_T1ReloadHi,0x00);
+		rc66x_set_reg8(rc66x, RC66X_REG_T1ReloadLo,0x00);
+
+		rc66x_set_reg8(rc66x, RC66X_REG_Command, RC66X_CMD_Idle);	//Cancel any commands
+		rc66x_set_reg8(rc66x, RC66X_REG_FIFOControl, 0xB0);			//Flush Fifo
+		rc66x_set_reg8(rc66x, RC66X_REG_IRQ0, 0x7F);				//Clear IRQ0
+		rc66x_set_reg8(rc66x, RC66X_REG_IRQ1, 0x7F);				//Clear IRQ1
+
+		printf("Sending instruction ");
+		for (int i = 0 ; i < instr_len; i++) {
+			printf("%02X ", instruction[i]);
+		}
+		puts("");
+
+		//Send instruction to reader
+		rc66x_set_reg8(rc66x, RC66X_REG_DrvMode,0x89); 	//Field on
+
+		rc66x_set_reg8(rc66x, RC66X_REG_Command, RC66X_CMD_Idle);	//Cancel any commands
+		rc66x_set_reg8(rc66x, RC66X_REG_FIFOControl, 0xB0);			//Flush Fifo
+		rc66x_send(rc66x, RC66X_REG_FIFOData, instruction, instr_len);
+
+		// clear interrupts
+		rc66x_set_reg8(rc66x, RC66X_REG_IRQ0, 0x7F);				//Clear IRQ0
+		rc66x_set_reg8(rc66x, RC66X_REG_IRQ1, 0x7F);				//Clear IRQ1
+
+		// Enable IRQ0,IRQ1 interrupt sources
+		 rc66x_set_reg8(rc66x, RC66X_REG_IRQ0En, (1<<4)  | (1<<3));
+		 rc66x_set_reg8(rc66x, RC66X_REG_IRQ1En,  (1<<6)  | (1<<1) );
+
+		 rc66x_set_reg8(rc66x, RC66X_REG_Command, RC66X_CMD_Transceive);
+
+		  // block until transmission ending
+		  uint8_t irq0_value = 0;
+		  uint8_t irq1_value = 0;
+		  uint32_t timeout= rc66x->get_time_ms() ;
+		  while (!((irq0_value & 0x08)== 0x08)) {
+			  rc66x_get_reg8(rc66x, RC66X_REG_IRQ0, &irq0_value);
+		    if(rc66x->get_time_ms()>(timeout+50)){
+		    	puts("Time timeout 1");
+		    	break;
+		    }
+		  }
+
+		  //Wait for timer1 underflow (irq1(0x02) or RxIrQ irq0(0x04;
+		  irq0_value =0;
+		  timeout= rc66x->get_time_ms();
+		  while ( ((irq1_value & 0x02) !=0x02)  && ((irq0_value & 0x04) !=0x04)){
+			rc66x_get_reg8(rc66x, RC66X_REG_IRQ0, &irq0_value);
+			rc66x_get_reg8(rc66x, RC66X_REG_IRQ1, &irq1_value);
+		    if(rc66x->get_time_ms()>(timeout+50)){
+		    	puts("Time timeout 2");
+			    	break;
+			 }
+		  }
+
+		  //Check for error
+		if((irq1_value & 0x02)){
+			puts("IRQ1 marks error");
+			return 0x00;								//return error!
+		};
+
+		//disable IRQ0,IRQ1
+		rc66x_set_reg8(rc66x, RC66X_REG_IRQ0En,0x00);
+		rc66x_set_reg8(rc66x, RC66X_REG_IRQ1En,0x00);
+
+		//see if a uid was found:
+		//uint16_t fifo_len = mfrc630_fifo_length();
+		uint8_t fifo_len;
+		rc66x_get_reg8(rc66x, RC66X_REG_FIFOLength, &fifo_len);
+		printf("Fifo Len %d\n", fifo_len);
+		uint8_t buff[64];
+		rc66x_recv(rc66x, RC66X_REG_FIFOData, buff,fifo_len);
+
+		for (int i = 0 ; i < fifo_len; i++) {
+			printf("%02X ",buff[i]);
+		}
+		puts("");
+
+		uint8_t test;
+		rc66x_get_reg8(rc66x,0x0A,&test);
+		printf("Reg 0x0A val %02X\n", test);
+
+		return fifo_len;								//return state - valid
+	}
+
+uint16_t mfrc630_ISO15693_readTag(rc66x_t *rc66x, uint8_t* uid, int colpos){
+
+	//Set timeout for Timer0/Timer1, set reload values
+	rc66x_set_reg8(rc66x, RC66X_REG_T0ReloadHi,0x24);
+	rc66x_set_reg8(rc66x, RC66X_REG_T0ReloadLo,0xEB);
+	rc66x_set_reg8(rc66x, RC66X_REG_T1ReloadHi,0x00);
+	rc66x_set_reg8(rc66x, RC66X_REG_T1ReloadLo,0x00);
+
+	rc66x_set_reg8(rc66x, RC66X_REG_Command, RC66X_CMD_Idle);	//Cancel any commands
+	rc66x_set_reg8(rc66x, RC66X_REG_FIFOControl, 0xB0);			//Flush Fifo
+	rc66x_set_reg8(rc66x, RC66X_REG_IRQ0, 0x7F);				//Clear IRQ0
+	rc66x_set_reg8(rc66x, RC66X_REG_IRQ1, 0x7F);				//Clear IRQ1
+
+	//Prepare instruction to send to fifo
+	uint8_t instruction[12] ={
+			0x36,					//set the flags,
+			0x01,				//set "Inventory Command"
+			0x00,					//set blank
+			0x00					//set blank
+	};
+
+
+
+	int valid_bytes = colpos / 8;
+	int valid_bits = colpos % 8;
+
+	printf("Colpos %2d, byte %d bit %d\n",colpos, valid_bytes, valid_bits);
+
+	memcpy(instruction + 4, uid + 2, 8);
+
+//	printf("Pre-instruction ");
+//	for (int i = 0 ; i < 12; i++) {
+//		printf("%02X ", instruction[i]);
+//	}
+
+	switch(valid_bits) {
+	case 1:
+		instruction[valid_bytes+ 2] &= 0b1;
+		break;
+	case 2:
+		instruction[valid_bytes+ 2] &= 0b11;
+		break;
+	case 3:
+		instruction[valid_bytes+ 2] &= 0b111;
+		break;
+	case 4:
+		instruction[valid_bytes+ 2] &= 0b1111;
+		break;
+	case 5:
+		instruction[valid_bytes+ 2] &= 0b11111;
+		break;
+	case 6:
+		instruction[valid_bytes+ 2] &= 0b111111;
+		break;
+	case 7:
+		instruction[valid_bytes+ 2] &= 0b1111111;
+		break;
+	}
+
+
+	int instr_len = 4;
+	if (valid_bytes) instr_len += valid_bytes - 2;
+	if (valid_bits) {
+		instr_len ++;
+		instruction[3] = valid_bits + 1;
+	}
+
+
+	printf("Sending instruction ");
+	for (int i = 0 ; i < instr_len; i++) {
+		printf("%02X ", instruction[i]);
+	}
+	puts("");
+
+
+
+	//Send instruction to reader
+	rc66x_set_reg8(rc66x, RC66X_REG_DrvMode,0x89); 	//Field on
+
+	rc66x_set_reg8(rc66x, RC66X_REG_Command, RC66X_CMD_Idle);	//Cancel any commands
+	rc66x_set_reg8(rc66x, RC66X_REG_FIFOControl, 0xB0);			//Flush Fifo
+	rc66x_send(rc66x, RC66X_REG_FIFOData, instruction, instr_len);
+
+	// clear interrupts
+	rc66x_set_reg8(rc66x, RC66X_REG_IRQ0, 0x7F);				//Clear IRQ0
+	rc66x_set_reg8(rc66x, RC66X_REG_IRQ1, 0x7F);				//Clear IRQ1
+
+	// Enable IRQ0,IRQ1 interrupt sources
+	 rc66x_set_reg8(rc66x, RC66X_REG_IRQ0En, (1<<4)  | (1<<3));
+	 rc66x_set_reg8(rc66x, RC66X_REG_IRQ1En,  (1<<6)  | (1<<1) );
+
+	 rc66x_set_reg8(rc66x, RC66X_REG_Command, RC66X_CMD_Transceive);
+
+	  // block until transmission ending
+	  uint8_t irq0_value = 0;
+	  uint8_t irq1_value = 0;
+	  uint32_t timeout= rc66x->get_time_ms() ;
+	  while (!((irq0_value & 0x08)== 0x08)) {
+		  rc66x_get_reg8(rc66x, RC66X_REG_IRQ0, &irq0_value);
+	    if(rc66x->get_time_ms()>(timeout+50)){
+	    	puts("Time timeout 1");
+	    	break;
+	    }
+	  }
+
+	  //Wait for timer1 underflow (irq1(0x02) or RxIrQ irq0(0x04;
+	  irq0_value =0;
+	  timeout= rc66x->get_time_ms();
+	  while ( ((irq1_value & 0x02) !=0x02)  && ((irq0_value & 0x04) !=0x04)){
+		rc66x_get_reg8(rc66x, RC66X_REG_IRQ0, &irq0_value);
+		rc66x_get_reg8(rc66x, RC66X_REG_IRQ1, &irq1_value);
+	    if(rc66x->get_time_ms()>(timeout+50)){
+	    	puts("Time timeout 2");
+		    	break;
+		 }
+	  }
+
+	  //Check for error
+	if((irq1_value & 0x02)){
+		puts("IRQ1 marks error");
+		return 0x00;								//return error!
+	};
+
+	//disable IRQ0,IRQ1
+	rc66x_set_reg8(rc66x, RC66X_REG_IRQ0En,0x00);
+	rc66x_set_reg8(rc66x, RC66X_REG_IRQ1En,0x00);
+
+	//see if a uid was found:
+	//uint16_t fifo_len = mfrc630_fifo_length();
+	uint8_t fifo_len;
+	rc66x_get_reg8(rc66x, RC66X_REG_FIFOLength, &fifo_len);
+	printf("Fifo Len %d\n", fifo_len);
+	if(fifo_len != 0x0A){
+		return 0x00;								//return error - invalid uid size!
+	}
+
+	//transfer UID to variable
+
+	rc66x_recv(rc66x, RC66X_REG_FIFOData, uid,fifo_len);
+//	for (int i = 0 ; i < fifo_len; i++) {
+//		printf("%02X ",uid[i]);
+//	}
+//	puts("");
+
+	uint8_t test;
+	rc66x_get_reg8(rc66x,0x0A,&test);
+	printf("Reg 0x0A val %02X\n", test);
+
+	if (test & 0x04) {
+		puts("Collision detected");
+		rc66x_get_reg8(rc66x,0x0D,&test);
+		printf("Valid : %d at pos %d\n", 0x80==(test&0x80), test&0x7F);
+		uint8_t col1[10];
+		uint8_t col2[10];
+		memcpy(col1,uid,10);
+		memcpy(col2,uid,10);
+		int col_byte = (test & 0x7F) / 8;
+		int col_bit = (test & 0x7F) % 8;
+		col1[col_byte] |= (1 << (col_bit));
+		col2[col_byte] &= ~(1 << (col_bit));
+
+		printf("col1: ");
+		for (int i = 0 ; i < col_byte + (col_bit > 0); i++) {
+			printf("%02X ",col1[i]);
+		}
+		printf("\ncol2: ");
+		for (int i = 0 ; i < col_byte + (col_bit > 0); i++) {
+			printf("%02X ",col2[i]);
+		}
+
+		puts("Anticol pass 1");
+		mfrc630_ISO15693_readTag(rc66x,col1, 1+ (test&0x7F));
+		puts("Anticol pass 2");
+		mfrc630_ISO15693_readTag(rc66x,col2, 1 + (test&0x7F));
+
+	} else {
+			printf("\t\t UID:");
+			for (int i = 2 ; i < fifo_len; i++) {
+				printf("%02X ",uid[i]);
+			}
+			puts("");
+
+			{
+			uint8_t read_instr[10];
+			read_instr[0] = 0x22; // optioon: addressed, high data rate
+			read_instr[1] = 0x2B; // get info
+			memcpy(read_instr + 2, uid + 2, 8);
+			test_read_block(rc66x, read_instr, sizeof(read_instr) );
+			}
+
+
+			{
+			uint8_t read_instr[11];
+			read_instr[0] = 0x22; // optioon: addressed, high data rate
+			read_instr[1] = 0x20; // read single block
+			memcpy(read_instr + 2, uid + 2, 8);
+			read_instr[10] = 0x00; // block number;
+			test_read_block(rc66x, read_instr, sizeof(read_instr) );
+			}
+
+
+	}
+
+	return fifo_len;								//return state - valid
 }

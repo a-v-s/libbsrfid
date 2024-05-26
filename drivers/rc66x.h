@@ -183,6 +183,10 @@ typedef rc52x_result_t rc66x_result_t;
 #define RC66X_CMD_ReadE2			(0x0A)
 #define RC66X_CMD_LoadReg			(0x0C)
 #define RC66X_CMD_LoadProtocol		(0x0D)
+#define RC66X_CMD_LoadKeyE2			(0x0E)
+#define RC66X_CMD_StoreKeyE2		(0x0F)
+#define RC66X_CMD_ReadRNR			(0x1C)
+#define RC66X_CMD_SoftReset			(0x1F)
 
 #define RC66X_TIMEOUT_ms			(40)
 
@@ -204,3 +208,6 @@ rc66x_result_t rc66x_transceive(rc66x_t *rc66x,uint8_t *sendData,
 		);
 
 void rc66x_init(rc66x_t *rc66x);
+
+
+void rc66x_test(rc66x_t *rc66x) ;
