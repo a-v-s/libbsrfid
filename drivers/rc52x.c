@@ -136,7 +136,7 @@ void rc52x_init(rc52x_t *rc52x) {
 	if (!rc52x->delay_ms)
 		return;
 
-	rc52x->TransceiveData = rc52x_transceive;
+	rc52x->TransceiveData = (void*)rc52x_transceive;
 	//rc52x->SetBitFraming = rc52x_set_bit_framing;
 	rc52x_reset(rc52x);
 

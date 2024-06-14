@@ -51,7 +51,7 @@ void rc66x_init(rc66x_t *rc66x) {
 		return;
 	if (!rc66x->delay_ms)
 		return;
-	rc66x->TransceiveData = rc66x_transceive;
+	rc66x->TransceiveData = (void*)rc66x_transceive; //!!
 	rc66x_reset(rc66x);
 
 	// Translated from AN12657  4.1.1
@@ -360,7 +360,8 @@ void mfrc630_ISO15693_init(rc66x_t *rc66x){
 }
 
 
-int test_read_block(rc66x_t *rc66x, uint8_t* instruction, int instr_len) {
+int test_read_block(rc66x_t *rc66x, uint8_t* send_data, int send_len
+		, uint8_t* recv_data, int *recv_len) {
 
 
 		//Set timeout for Timer0/Timer1, set reload values
@@ -374,18 +375,18 @@ int test_read_block(rc66x_t *rc66x, uint8_t* instruction, int instr_len) {
 		rc66x_set_reg8(rc66x, RC66X_REG_IRQ0, 0x7F);				//Clear IRQ0
 		rc66x_set_reg8(rc66x, RC66X_REG_IRQ1, 0x7F);				//Clear IRQ1
 
-		printf("Sending instruction ");
-		for (int i = 0 ; i < instr_len; i++) {
-			printf("%02X ", instruction[i]);
-		}
-		puts("");
+//		printf("Sending instruction ");
+//		for (int i = 0 ; i < send_len; i++) {
+//			printf("%02X ", send_data[i]);
+//		}
+//		puts("");
 
 		//Send instruction to reader
 		rc66x_set_reg8(rc66x, RC66X_REG_DrvMode,0x89); 	//Field on
 
 		rc66x_set_reg8(rc66x, RC66X_REG_Command, RC66X_CMD_Idle);	//Cancel any commands
 		rc66x_set_reg8(rc66x, RC66X_REG_FIFOControl, 0xB0);			//Flush Fifo
-		rc66x_send(rc66x, RC66X_REG_FIFOData, instruction, instr_len);
+		rc66x_send(rc66x, RC66X_REG_FIFOData, send_data, send_len);
 
 		// clear interrupts
 		rc66x_set_reg8(rc66x, RC66X_REG_IRQ0, 0x7F);				//Clear IRQ0
@@ -435,18 +436,17 @@ int test_read_block(rc66x_t *rc66x, uint8_t* instruction, int instr_len) {
 		//uint16_t fifo_len = mfrc630_fifo_length();
 		uint8_t fifo_len;
 		rc66x_get_reg8(rc66x, RC66X_REG_FIFOLength, &fifo_len);
-		printf("Fifo Len %d\n", fifo_len);
-		uint8_t buff[64];
-		rc66x_recv(rc66x, RC66X_REG_FIFOData, buff,fifo_len);
-
-		for (int i = 0 ; i < fifo_len; i++) {
-			printf("%02X ",buff[i]);
+//		printf("Fifo Len %d\n", fifo_len);
+		if (recv_data && recv_len) {
+			if (fifo_len >recv_len) return -fifo_len;
+			*recv_len=fifo_len;
+			rc66x_recv(rc66x, RC66X_REG_FIFOData, recv_data,fifo_len);
 		}
-		puts("");
 
-		uint8_t test;
-		rc66x_get_reg8(rc66x,0x0A,&test);
-		printf("Reg 0x0A val %02X\n", test);
+		uint8_t error;
+		rc66x_get_reg8(rc66x,0x0A,&error);
+//		printf("Reg 0x0A val %02X\n", error);
+		if(error) return 0;
 
 		return fifo_len;								//return state - valid
 	}
@@ -634,21 +634,65 @@ uint16_t mfrc630_ISO15693_readTag(rc66x_t *rc66x, uint8_t* uid, int colpos){
 			puts("");
 
 			{
-			uint8_t read_instr[10];
-			read_instr[0] = 0x22; // optioon: addressed, high data rate
-			read_instr[1] = 0x2B; // get info
-			memcpy(read_instr + 2, uid + 2, 8);
-			test_read_block(rc66x, read_instr, sizeof(read_instr) );
+				uint8_t read_instr[10];
+				uint8_t response_buffer[16];
+				int response_size = sizeof(response_buffer);
+				read_instr[0] = 0x22; // optioon: addressed, high data rate
+				read_instr[1] = 0x2B; // get info
+				memcpy(read_instr + 2, uid + 2, 8);
+				test_read_block(rc66x, read_instr, sizeof(read_instr) , response_buffer, &response_size);
+
+				for (int i = 0 ; i < response_size; i++) {
+					printf("%02X ",response_buffer[i]);
+				}
+				puts("");
+
+				if (response_buffer[0]) {
+					// error
+					puts("Error");
+				} else {
+					int pos = 10;
+					if (response_buffer[1] & 0x01) {
+						printf("DSFID   %02X\n", response_buffer[pos++]);
+					}
+					if (response_buffer[1] & 0x02) {
+						printf("AFI     %02X\n", response_buffer[pos++]);
+					}
+					if (response_buffer[1] & 0x04) {
+						uint8_t number_of_blocks = response_buffer[pos++];
+						uint8_t size_of_block = response_buffer[pos++];
+						number_of_blocks++;
+						size_of_block++;
+						printf("Size: %d * %d\n", number_of_blocks, size_of_block);
+					}
+					if (response_buffer[1] & 0x08) {
+						printf("IC Ref. %02X\n", response_buffer[pos++]);
+					}
+				}
 			}
 
 
 			{
 			uint8_t read_instr[11];
+			uint8_t response_buffer[16];
+			int response_size = sizeof(response_buffer);
 			read_instr[0] = 0x22; // optioon: addressed, high data rate
 			read_instr[1] = 0x20; // read single block
 			memcpy(read_instr + 2, uid + 2, 8);
 			read_instr[10] = 0x00; // block number;
-			test_read_block(rc66x, read_instr, sizeof(read_instr) );
+			while (!response_buffer[0]) {
+				response_size = sizeof(response_buffer);
+				test_read_block(rc66x, read_instr, sizeof(read_instr) , response_buffer, &response_size);
+				printf("Block %2d:\t",read_instr[10]);
+				if (response_buffer[0]) {
+					printf("Error %02X\n",response_buffer[1]);
+					break;
+				}
+
+				for (int i = 1 ; i < response_size; i++) printf("%02X ", response_buffer[i]);
+				puts("");
+				read_instr[10]++;
+			}
 			}
 
 

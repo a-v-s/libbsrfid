@@ -33,7 +33,7 @@
 
 #include "bshal_transport.h"
 
-typedef int(*delay_ms_f)(int ms);
+typedef void(*delay_ms_f)(uint32_t);
 typedef int(*get_time_ms_f)(void);
 
 

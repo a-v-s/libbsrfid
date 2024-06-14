@@ -149,7 +149,7 @@ pdc_result_t picc_anticol_iso14443a(bs_pdc_t * pdc, picc_t * picc_array, int *pi
 rc52x_result_t PICC_RequestA(bs_pdc_t *pdc, picc_t *picc) {
 	picc->protocol = picc_protocol_iso14443a;
 	size_t size = sizeof(iso14443a_atqa_t);
-	return PICC_REQA_or_WUPA(pdc, PICC_CMD_REQA, &picc->atqa, &size);
+	return PICC_REQA_or_WUPA(pdc, PICC_CMD_REQA, (void*)&picc->atqa, &size);
 } // End PICC_RequestA()
 
 /**
@@ -162,7 +162,7 @@ rc52x_result_t PICC_WakeupA(bs_pdc_t *pdc, picc_t *picc) {
 	if (picc->protocol != picc_protocol_iso14443a)
 		return STATUS_INVALID;
 	size_t size = sizeof(iso14443a_atqa_t);
-	return PICC_REQA_or_WUPA(pdc, PICC_CMD_WUPA, &picc->atqa, &size);
+	return PICC_REQA_or_WUPA(pdc, PICC_CMD_WUPA, (void*)&picc->atqa, &size);
 } //  // End PICC_WakeupA()
 
 /**
